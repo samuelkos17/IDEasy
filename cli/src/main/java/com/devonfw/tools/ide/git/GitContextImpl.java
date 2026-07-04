@@ -7,8 +7,12 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import com.devonfw.tools.ide.cli.CliException;
 import com.devonfw.tools.ide.context.IdeContext;
+import com.devonfw.tools.ide.log.IdeLogLevel;
 import com.devonfw.tools.ide.os.SystemInfoImpl;
 import com.devonfw.tools.ide.process.ProcessContext;
 import com.devonfw.tools.ide.process.ProcessErrorHandling;
@@ -20,6 +24,8 @@ import com.devonfw.tools.ide.variable.IdeVariables;
  * Implements the {@link GitContext}.
  */
 public class GitContextImpl implements GitContext {
+
+  private static final Logger LOG = LoggerFactory.getLogger(GitContextImpl.class);
 
   /** @see #getContext() */
   protected final IdeContext context;
@@ -54,6 +60,9 @@ public class GitContextImpl implements GitContext {
   @Override
   public boolean isRepositoryUpdateAvailable(Path repository) {
 
+    if (!hasUpstream(repository)) {
+      return false;
+    }
     String localFailureMessage = String.format("Failed to get the local commit id of settings repository '%s'.", repository);
     String remoteFailureMessage = String.format("Failed to get the remote commit id of settings repository '%s', missing remote upstream branch?", repository);
     String localCommitId = runGitCommandAndGetSingleOutput(localFailureMessage, repository, ProcessMode.DEFAULT_CAPTURE, "rev-parse", "HEAD");
@@ -67,14 +76,19 @@ public class GitContextImpl implements GitContext {
   @Override
   public boolean isRepositoryUpdateAvailable(Path repository, Path trackedCommitIdPath) {
 
-    String trackedCommitId;
-    try {
-      trackedCommitId = Files.readString(trackedCommitIdPath);
-    } catch (IOException e) {
+    String trackedCommitId = this.context.getFileAccess().readFileContent(trackedCommitIdPath);
+    if (trackedCommitId == null) {
+      LOG.warn("Commit ID was not present at {}", trackedCommitIdPath);
+      return true;
+    }
+    if (!hasUpstream(repository)) {
       return false;
     }
     String remoteFailureMessage = String.format("Failed to get the remote commit id of settings repository '%s', missing remote upstream branch?", repository);
     String remoteCommitId = runGitCommandAndGetSingleOutput(remoteFailureMessage, repository, ProcessMode.DEFAULT_CAPTURE, "rev-parse", "@{u}");
+    if (remoteCommitId == null) {
+      return false;
+    }
     return !trackedCommitId.equals(remoteCommitId);
   }
 
@@ -85,6 +99,71 @@ public class GitContextImpl implements GitContext {
     reset(repository, gitUrl.branch(), remoteName);
     cleanup(repository);
   }
+
+  @Override
+  public void pullSafelyWithStash(Path repository) {
+    String token = "autostash:pull:" + java.util.UUID.randomUUID();
+    LOG.debug("Untracked files found. Creating temporary stash with token '{}'", token);
+    ProcessResult stashRes = runGitCommand(repository, ProcessMode.DEFAULT, "--no-pager", "stash", "push", "--include-untracked", "-m", token, "--quiet");
+    if (!stashRes.isSuccessful()) {
+      LOG.warn("Failed to create stash before pull on {}", repository);
+      handleErrors(repository, stashRes);
+    }
+
+    ProcessResult listRes = runGitCommand(repository, ProcessMode.DEFAULT_CAPTURE, "--no-pager", "stash", "list");
+    if (!listRes.isSuccessful()) {
+      LOG.warn("Failed to list stash after creating temporary stash on {}", repository);
+      handleErrors(repository, listRes);
+    }
+
+    String stashRef = findStashRefByMessage(listRes.getOut(), token);
+    if (stashRef == null) {
+      LOG.warn("Could not find created stash by token '{}'. Leaving stash untouched.", token);
+    } else {
+      LOG.debug("Created stash identified as '{}'", stashRef);
+    }
+
+    pull(repository);
+
+    if (stashRef != null) {
+      ProcessResult popRes = runGitCommand(repository, ProcessMode.DEFAULT, "--no-pager", "stash", "pop", stashRef, "--quiet");
+      if (!popRes.isSuccessful()) {
+        LOG.warn("Applying stash {} failed after successful pull on {}.", stashRef, repository);
+        handleErrors(repository, popRes);
+      } else {
+        LOG.debug("Stash {} successfully popped after pull.", stashRef);
+      }
+    } else {
+      LOG.warn("Skipping stash pop because stashRef is unknown (token '{}'). Stash remains on the stack.", token);
+    }
+  }
+
+  @Override
+  public boolean hasUntrackedFiles(Path repository) {
+    ProcessResult status = runGitCommand(repository, ProcessMode.DEFAULT_CAPTURE, "--no-pager", "status", "--porcelain", "-uall");
+    if (!status.isSuccessful()) {
+      handleErrors(repository, status);
+      return false;
+    }
+    List<String> out = status.getOut();
+    return !out.isEmpty();
+  }
+
+  private String findStashRefByMessage(List<String> stashList, String needle) {
+    if (stashList.isEmpty()) {
+      return null;
+    }
+    for (String line : stashList) {
+      if (line.contains(needle)) {
+        int idx = line.indexOf(':');
+        if (idx > 0) {
+          return line.substring(0, idx).trim();
+        }
+      }
+    }
+    return null;
+  }
+
 
   @Override
   public void pullOrClone(GitUrl gitUrl, Path repository) {
@@ -118,14 +197,14 @@ public class GitContextImpl implements GitContext {
     if (!result.isSuccessful()) {
       String message = "Failed to update git repository at " + targetRepository;
       if (this.context.isOfflineMode()) {
-        this.context.warning(message);
-        this.context.interaction("Continuing as we are in offline mode - results may be outdated!");
+        LOG.warn(message);
+        IdeLogLevel.INTERACTION.log(LOG, "Continuing as we are in offline mode - results may be outdated!");
       } else {
-        this.context.error(message);
+        LOG.error(message);
         if (this.context.isOnline()) {
-          this.context.error("See above error for details. If you have local changes, please stash or revert and retry.");
+          LOG.error("See above error for details. If you have local changes, please stash or revert and retry.");
         } else {
-          this.context.error("It seems you are offline - please ensure Internet connectivity and retry or activate offline mode (-o or --offline).");
+          LOG.error("It seems you are offline - please ensure Internet connectivity and retry or activate offline mode (-o or --offline).");
         }
         this.context.askToContinue("Typically you should abort and fix the problem. Do you want to continue anyways?");
       }
@@ -162,13 +241,13 @@ public class GitContextImpl implements GitContext {
   public void pull(Path repository) {
 
     if (this.context.isOffline()) {
-      this.context.info("Skipping git pull on {} because offline", repository);
+      LOG.info("Skipping git pull on {} because offline", repository);
       return;
     }
     ProcessResult result = runGitCommand(repository, ProcessMode.DEFAULT, "--no-pager", "pull", "--quiet");
     if (!result.isSuccessful()) {
       String branchName = determineCurrentBranch(repository);
-      this.context.warning("Git pull on branch {} failed for repository {}.", branchName, repository);
+      LOG.warn("Git pull on branch {} failed for repository {}.", branchName, repository);
       handleErrors(repository, result);
     }
   }
@@ -186,7 +265,7 @@ public class GitContextImpl implements GitContext {
     ProcessResult result = runGitCommand(repository, ProcessMode.DEFAULT_CAPTURE, "fetch", Objects.requireNonNullElse(remote, "origin"), branch);
 
     if (!result.isSuccessful()) {
-      this.context.warning("Git fetch for '{}/{} failed.'.", remote, branch);
+      LOG.warn("Git fetch for '{}/{} failed.'.", remote, branch);
     }
   }
 
@@ -214,10 +293,10 @@ public class GitContextImpl implements GitContext {
     ProcessResult result = runGitCommand(repository, ProcessMode.DEFAULT, "diff-index", "--quiet", "HEAD");
     if (!result.isSuccessful()) {
       // reset to origin/master
-      this.context.warning("Git has detected modified files -- attempting to reset {} to '{}/{}'.", repository, remoteName, branchName);
+      LOG.warn("Git has detected modified files -- attempting to reset {} to '{}/{}'.", repository, remoteName, branchName);
       result = runGitCommand(repository, ProcessMode.DEFAULT, "reset", "--hard", remoteName + "/" + branchName);
       if (!result.isSuccessful()) {
-        this.context.warning("Git failed to reset {} to '{}/{}'.", remoteName, branchName, repository);
+        LOG.warn("Git failed to reset {} to '{}/{}'.", remoteName, branchName, repository);
         handleErrors(repository, result);
       }
     }
@@ -230,7 +309,7 @@ public class GitContextImpl implements GitContext {
     ProcessResult result = runGitCommand(repository, ProcessMode.DEFAULT_CAPTURE, "ls-files", "--other", "--directory", "--exclude-standard");
     if (!result.getOut().isEmpty()) {
       // delete untracked files
-      this.context.warning("Git detected untracked files in {} and is attempting a cleanup.", repository);
+      LOG.warn("Git detected untracked files in {} and is attempting a cleanup.", repository);
       runGitCommand(repository, "clean", "-df");
     }
   }
@@ -253,8 +332,7 @@ public class GitContextImpl implements GitContext {
     if (gitPath == null) {
       String message = "Git " + IdeContext.IS_NOT_INSTALLED_BUT_REQUIRED;
       if (SystemInfoImpl.INSTANCE.isWindows()) {
-        message += IdeContext.PLEASE_DOWNLOAD_AND_INSTALL_GIT + ":\n "
-            + IdeContext.WINDOWS_GIT_DOWNLOAD_URL;
+        message += IdeContext.PLEASE_DOWNLOAD_AND_INSTALL_GIT + ":\n " + IdeContext.WINDOWS_GIT_DOWNLOAD_URL;
       }
       throw new CliException(message);
     }
@@ -277,7 +355,7 @@ public class GitContextImpl implements GitContext {
 
     if (gitPath != null) {
       this.git = gitPath;
-      this.context.trace("Found git at: {}", gitPath);
+      LOG.trace("Found git at: {}", gitPath);
     }
 
     return gitPath;
@@ -286,30 +364,80 @@ public class GitContextImpl implements GitContext {
   private Path findGitOnWindowsViaBash() {
     Path gitPath;
     Path bashBinary = this.context.findBashRequired();
-    this.context.trace("Trying to find git path on Windows");
+    LOG.trace("Trying to find git path on Windows");
     if (Files.exists(bashBinary)) {
       gitPath = bashBinary.getParent().resolve("git.exe");
       if (Files.exists(gitPath)) {
-        this.context.trace("Git path was extracted from bash path at: {}", gitPath);
+        LOG.trace("Git path was extracted from bash path at: {}", gitPath);
       } else {
-        this.context.error("Git path: {} was extracted from bash path at: {} but it does not exist", gitPath, bashBinary);
+        LOG.error("Git path: {} was extracted from bash path at: {} but it does not exist", gitPath, bashBinary);
         return null;
       }
     } else {
-      this.context.error("Bash path was checked at: {} but it does not exist", bashBinary);
+      LOG.error("Bash path was checked at: {} but it does not exist", bashBinary);
       return null;
     }
     return gitPath;
   }
 
   private Path findGitInPath(Path gitPath) {
-    this.context.trace("Trying to find git executable within the PATH environment variable");
+    LOG.trace("Trying to find git executable within the PATH environment variable");
     Path binaryGitPath = this.context.getPath().findBinary(gitPath);
     if (gitPath == binaryGitPath) {
-      this.context.debug("No git executable could be found within the PATH environment variable");
+      LOG.debug("No git executable could be found within the PATH environment variable");
       return null;
     }
     return binaryGitPath;
+  }
+
+  /**
+   * Retrieves an optional git config value from the given repository.
+   *
+   * @param directory the git repository directory.
+   * @param key the git config key.
+   * @return the config value or {@code null} if not available.
+   */
+  private String getOptionalGitConfigValue(Path directory, String key) {
+
+    ProcessResult result = runGitCommand(
+        directory,
+        ProcessMode.DEFAULT_CAPTURE,
+        ProcessErrorHandling.NONE,
+        "config",
+        "--get",
+        key
+    );
+
+    if (result.isSuccessful() && result.getOut().size() == 1) {
+      return result.getOut().getFirst();
+    }
+
+    return null;
+
+  }
+
+  /**
+   * Checks if the current branch has an upstream remote branch configured.
+   *
+   * @param repository the git repository directory.
+   * @return {@code true} if an upstream is configured, {@code false} otherwise.
+   */
+  private boolean hasUpstream(Path repository) {
+
+    String branch = determineCurrentBranch(repository);
+    if ((branch == null) || branch.isBlank()) {
+      return false;
+    }
+
+    String remote = getOptionalGitConfigValue(repository, "branch." + branch + ".remote");
+    String merge = getOptionalGitConfigValue(repository, "branch." + branch + ".merge");
+
+    if ((remote == null) || (merge == null)) {
+      LOG.warn("No upstream configured for branch {} in settings repository {}. Please switch to a branch with remote upstream.", branch, repository);
+      return false;
+    }
+
+    return true;
   }
 
   private void runGitCommand(Path directory, String... args) {
@@ -334,7 +462,7 @@ public class GitContextImpl implements GitContext {
 
   private String runGitCommandAndGetSingleOutput(String warningOnError, Path directory, ProcessMode mode, String... args) {
     ProcessErrorHandling errorHandling = ProcessErrorHandling.NONE;
-    if (this.context.debug().isEnabled()) {
+    if (LOG.isDebugEnabled()) {
       errorHandling = ProcessErrorHandling.LOG_WARNING;
     }
     ProcessResult result = runGitCommand(directory, mode, errorHandling, args);
@@ -342,14 +470,14 @@ public class GitContextImpl implements GitContext {
       List<String> out = result.getOut();
       int size = out.size();
       if (size == 1) {
-        return out.get(0);
+        return out.getFirst();
       } else if (size == 0) {
         warningOnError += " - No output received from " + result.getCommand();
       } else {
         warningOnError += " - Expected single line of output but received " + size + " lines from " + result.getCommand();
       }
     }
-    this.context.warning(warningOnError);
+    LOG.warn(warningOnError);
     return null;
   }
 
@@ -366,8 +494,7 @@ public class GitContextImpl implements GitContext {
       processContext = this.context.newProcess().executable(findGitRequired()).withEnvVar("GIT_TERMINAL_PROMPT", "0").withEnvVar("GCM_INTERACTIVE", "never")
           .withEnvVar("GIT_ASKPASS", "echo").withEnvVar("SSH_ASKPASS", "echo").errorHandling(errorHandling).directory(directory);
     } else {
-      processContext = this.context.newProcess().executable(findGitRequired()).errorHandling(errorHandling)
-          .directory(directory);
+      processContext = this.context.newProcess().executable(findGitRequired()).errorHandling(errorHandling).directory(directory);
     }
 
     processContext.addArgs(args);
@@ -378,10 +505,10 @@ public class GitContextImpl implements GitContext {
   public void saveCurrentCommitId(Path repository, Path trackedCommitIdPath) {
 
     if ((repository == null) || (trackedCommitIdPath == null)) {
-      this.context.warning("Invalid usage of saveCurrentCommitId with null value");
+      LOG.warn("Invalid usage of saveCurrentCommitId with null value");
       return;
     }
-    this.context.trace("Saving commit Id of {} into {}", repository, trackedCommitIdPath);
+    LOG.trace("Saving commit Id of {} into {}", repository, trackedCommitIdPath);
     String currentCommitId = determineCurrentCommitId(repository);
     if (currentCommitId != null) {
       try {

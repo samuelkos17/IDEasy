@@ -2,15 +2,32 @@ package com.devonfw.tools.ide.url.tool.az;
 
 import com.devonfw.tools.ide.os.OperatingSystem;
 import com.devonfw.tools.ide.url.model.folder.UrlVersion;
-import com.devonfw.tools.ide.url.updater.GithubUrlUpdater;
+import com.devonfw.tools.ide.url.updater.GithubUrlTagUpdater;
 import com.devonfw.tools.ide.version.VersionIdentifier;
 
 /**
- * {@link GithubUrlUpdater} for Azure-CLI.
+ * {@link GithubUrlTagUpdater} for Azure-CLI.
  */
-public class AzureUrlUpdater extends GithubUrlUpdater {
+public class AzureUrlUpdater extends GithubUrlTagUpdater {
 
+  private static final String DOWNLOAD_BASE_URL = "https://azcliprod.blob.core.windows.net";
   private static final VersionIdentifier MIN_AZURE_VID = VersionIdentifier.of("2.17.0");
+
+  /**
+   * The Constructor.
+   */
+  public AzureUrlUpdater() {
+    super(DOWNLOAD_BASE_URL);
+  }
+
+  /**
+   * Package-private constructor used for testing {@link AzureUrlUpdater}.
+   *
+   * @param baseUrl mock url used as download and version base.
+   */
+  AzureUrlUpdater(String baseUrl) {
+    super(baseUrl, baseUrl);
+  }
 
   @Override
   public String getTool() {
@@ -38,12 +55,6 @@ public class AzureUrlUpdater extends GithubUrlUpdater {
   }
 
   @Override
-  protected String getDownloadBaseUrl() {
-
-    return "https://azcliprod.blob.core.windows.net";
-  }
-
-  @Override
   public String mapVersion(String version) {
 
     version = version.substring(version.lastIndexOf("-") + 1);
@@ -58,11 +69,15 @@ public class AzureUrlUpdater extends GithubUrlUpdater {
   @Override
   public String getCpeVendor() {
     return "microsoft";
-
   }
 
   @Override
   public String getCpeProduct() {
     return "az";
+  }
+
+  @Override
+  protected void initCpe(CpeRegistry cpe) {
+    cpe.addVendor("microsoft").addProduct("az").addProduct("azure_cli").addProduct("azure-command-line_interface");
   }
 }

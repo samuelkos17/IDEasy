@@ -2,12 +2,28 @@ package com.devonfw.tools.ide.url.tool.aws;
 
 import com.devonfw.tools.ide.os.OperatingSystem;
 import com.devonfw.tools.ide.url.model.folder.UrlVersion;
-import com.devonfw.tools.ide.url.updater.GithubUrlUpdater;
+import com.devonfw.tools.ide.url.updater.GithubUrlTagUpdater;
 
 /**
- * {@link GithubUrlUpdater} for AWS-CLI.
+ * {@link GithubUrlTagUpdater} for AWS-CLI.
  */
-public class AwsUrlUpdater extends GithubUrlUpdater {
+public class AwsUrlUpdater extends GithubUrlTagUpdater {
+
+  private static final String DOWNLOAD_BASE_URL = "https://awscli.amazonaws.com";
+
+  public AwsUrlUpdater() {
+    super(DOWNLOAD_BASE_URL);
+  }
+
+  /**
+   * Package-private constructor used for testing {@link AwsUrlUpdater}.
+   *
+   * @param downloadBaseUrl mock url used as download base
+   * @param versionBaseUrl mock url used as version base.
+   */
+  AwsUrlUpdater(String downloadBaseUrl, String versionBaseUrl) {
+    super(downloadBaseUrl, versionBaseUrl);
+  }
 
   @Override
   public String getTool() {
@@ -25,11 +41,6 @@ public class AwsUrlUpdater extends GithubUrlUpdater {
   protected String getGithubRepository() {
 
     return "aws-cli";
-  }
-
-  @Override
-  protected String getDownloadBaseUrl() {
-    return "https://awscli.amazonaws.com";
   }
 
   @Override
@@ -73,7 +84,7 @@ public class AwsUrlUpdater extends GithubUrlUpdater {
 
   @Override
   public String getCpeProduct() {
-    return "aws";
+    return "aws_command_line_interface";
   }
 
 }

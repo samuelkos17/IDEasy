@@ -13,7 +13,7 @@ import com.devonfw.tools.ide.common.Tag;
 import com.devonfw.tools.ide.context.AbstractIdeContextTest;
 import com.devonfw.tools.ide.context.AbstractIdeTestContext;
 import com.devonfw.tools.ide.context.IdeContext;
-import com.devonfw.tools.ide.context.IdeSlf4jContext;
+import com.devonfw.tools.ide.context.IdeTestContext;
 import com.devonfw.tools.ide.process.ProcessContext;
 import com.devonfw.tools.ide.process.ProcessErrorHandling;
 import com.devonfw.tools.ide.process.ProcessMode;
@@ -37,7 +37,7 @@ class IdeToolDummyCommandletTest extends AbstractIdeContextTest {
   @Test
   void testDummyCommandlet(@TempDir Path tempDir) {
 
-    AbstractIdeTestContext context = new IdeSlf4jContext();
+    AbstractIdeTestContext context = new IdeTestContext();
     context.setPluginsPath(tempDir);
     context.setIdeHome(tempDir);
     context.setSettingsPath(Path.of("src/test/resources/settings/dummy"));
@@ -51,6 +51,7 @@ class IdeToolDummyCommandletTest extends AbstractIdeContextTest {
     assertThat(dummyCommandlet.installedPlugins).hasSize(1);
     ToolPluginDescriptor plugin = dummyCommandlet.installedPlugins.getFirst();
     assertThat(plugin.id()).isEqualTo("plugin1-id");
+    assertThat(plugin.version()).isEqualTo("1.0.1");
     assertThat(plugin.url()).isEqualTo("https://dummy.com/plugins/plugin1-url");
   }
 

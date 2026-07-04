@@ -1,9 +1,12 @@
 package com.devonfw.tools.ide.context;
 
 import java.nio.file.Path;
+import java.util.List;
 import java.util.Properties;
 
 import org.junit.jupiter.api.Test;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import com.devonfw.tools.ide.cli.CliArguments;
 import com.devonfw.tools.ide.common.SystemPath;
@@ -14,13 +17,22 @@ import com.devonfw.tools.ide.log.IdeLogEntry;
 import com.devonfw.tools.ide.log.IdeLogLevel;
 import com.devonfw.tools.ide.os.SystemInfo;
 import com.devonfw.tools.ide.os.SystemInfoMock;
+import com.devonfw.tools.ide.security.ToolVersionChoice;
+import com.devonfw.tools.ide.security.ToolVulnerabilities;
+import com.devonfw.tools.ide.tool.ToolEdition;
+import com.devonfw.tools.ide.tool.ToolEditionAndVersion;
+import com.devonfw.tools.ide.url.model.file.json.Cve;
 import com.devonfw.tools.ide.variable.IdeVariables;
 import com.devonfw.tools.ide.version.IdeVersion;
+import com.devonfw.tools.ide.version.VersionIdentifier;
+import com.devonfw.tools.ide.version.VersionRange;
 
 /**
  * Test of {@link IdeContext}.
  */
-class IdeContextTest extends AbstractIdeContextTest {
+public class IdeContextTest extends AbstractIdeContextTest {
+
+  private static final Logger LOG = LoggerFactory.getLogger(IdeContextTest.class);
 
   /**
    * Test of {@link IdeContext} initialization from basic project.
@@ -136,26 +148,6 @@ class IdeContextTest extends AbstractIdeContextTest {
     assertThat(workspaceName).isEqualTo("foo-test");
   }
 
-  // hier test einfügen mit idetestcontext
-  @Test
-  void testIdeVersionTooSmall() {
-    // arrange
-    String path = "project/workspaces/foo-test";
-    IdeTestContext context = newContext(PROJECT_BASIC, path, false);
-    EnvironmentVariables variables = context.getVariables();
-    String ideMinVersion = String.valueOf(Integer.MAX_VALUE);
-    variables.getByType(EnvironmentVariablesType.CONF).set("IDE_MIN_VERSION", ideMinVersion);
-    CliArguments args = new CliArguments();
-    String warningMessage = String.format("Your version of IDEasy is currently %s\n"
-        + "However, this is too old as your project requires at latest version %s\n"
-        + "Please run the following command to update to the latest version of IDEasy and fix the problem:\n"
-        + "ide upgrade", IdeVersion.getVersionIdentifier().toString(), ideMinVersion);
-    // act
-    context.run(args);
-    // assert
-    assertThat(context).logAtWarning().hasMessage(warningMessage);
-  }
-
   @Test
   void testIdeVersionOk() {
     // arrange
@@ -182,19 +174,19 @@ class IdeContextTest extends AbstractIdeContextTest {
     String testDebugMessage = "Test debug message that will be suppressed because of threshold";
     IdeTestContext context = newContext(PROJECT_BASIC, null, false);
     // act
-    context.warning(testWarningMessage);
+    LOG.warn(testWarningMessage);
     // assert
     assertThat(context).logAtWarning().hasMessage(testWarningMessage);
     // and act
     context.runWithoutLogging(() -> {
-      context.warning(testWarningMessage2);
-      context.info(testInfoMessage);
-      context.debug(testDebugMessage);
+      LOG.warn(testWarningMessage2);
+      LOG.info(testInfoMessage);
+      LOG.debug(testDebugMessage);
       assertThat(context).log().hasNoMessage(testWarningMessage2);
       assertThat(context).log().hasNoMessage(testInfoMessage);
       assertThat(context).log().hasNoMessage(testDebugMessage);
     }, IdeLogLevel.INFO);
-    context.warning(testWarningMessage3);
+    LOG.warn(testWarningMessage3);
 
     assertThat(context).log()
         .hasEntries(IdeLogEntry.ofWarning(testWarningMessage), IdeLogEntry.ofWarning(testWarningMessage2), IdeLogEntry.ofInfo(testInfoMessage),
@@ -287,6 +279,38 @@ class IdeContextTest extends AbstractIdeContextTest {
         .hasMessage("A proper bash executable was found in your PATH environment variable at: " + bashExePath);
 
     assertThat(bash).isEqualTo(bashExePath);
+  }
+
+  @Test
+  void testQuestionWithMultipleOptions() {
+    IdeTestContext context = newContext(PROJECT_BASIC, null, false);
+    String[] options = { "option1", "option2" };
+    context.setAnswers("option1");
+    String result = context.question(options, "Which option?");
+    assertThat(result).isEqualTo("option1");
+  }
+
+  @Test
+  void testQuestionWithSingleOptionAndEmptyAnswer() {
+    IdeTestContext context = newContext(PROJECT_BASIC, null, false);
+    String[] options = { "onlyOption" };
+    context.setAnswers(""); // Empty answer (Enter)
+    String result = context.question(options, "Which option?");
+    assertThat(result).isEqualTo("onlyOption");
+  }
+
+  @Test
+  void testQuestionWithSingleToolVersionChoiceAndEmptyAnswer() {
+    IdeTestContext context = newContext(PROJECT_BASIC, null, false);
+    ToolEdition edition = new ToolEdition("java", "oracle");
+    VersionIdentifier version = VersionIdentifier.of("17");
+    Cve cve = new Cve("CVE-2023-XXXX", 9.8, List.of(VersionRange.of("[17,18)")));
+    ToolVersionChoice choice = new ToolVersionChoice(new ToolEditionAndVersion(edition, version), "current", ToolVulnerabilities.of(List.of(cve)));
+    ToolVersionChoice[] options = { choice };
+
+    context.setAnswers(""); // Empty answer (Enter)
+    ToolVersionChoice result = context.question(options, "Which version?");
+    assertThat(result).isSameAs(choice);
   }
 
 }

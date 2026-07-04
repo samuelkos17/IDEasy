@@ -4,6 +4,9 @@ import java.nio.file.Path;
 import java.util.List;
 import java.util.Set;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import com.devonfw.tools.ide.cache.CachedValue;
 import com.devonfw.tools.ide.common.Tag;
 import com.devonfw.tools.ide.context.IdeContext;
@@ -19,6 +22,8 @@ import com.devonfw.tools.ide.version.VersionIdentifier;
  * @param <P> type of the {@link ToolCommandlet} acting as {@link #getPackageManagerClass() package manager}.
  */
 public abstract class PackageManagerBasedLocalToolCommandlet<P extends ToolCommandlet> extends LocalToolCommandlet {
+
+  private static final Logger LOG = LoggerFactory.getLogger(PackageManagerBasedLocalToolCommandlet.class);
 
   private final CachedValue<VersionIdentifier> installedVersion;
 
@@ -156,7 +161,7 @@ public abstract class PackageManagerBasedLocalToolCommandlet<P extends ToolComma
     try {
       return computeInstalledVersion();
     } catch (Exception e) {
-      this.context.debug().log(e, "Failed to compute installed version of {}", this.tool);
+      LOG.debug("Failed to compute installed version of {}", this.tool, e);
       return null;
     }
   }
@@ -175,13 +180,32 @@ public abstract class PackageManagerBasedLocalToolCommandlet<P extends ToolComma
     return this.installedVersion.get();
   }
 
+  /**
+   * Override to ignore the {@code toolPath} parameter and use the package-manager based detection of the actually installed version.
+   *
+   * @param toolPath the installation {@link Path} where to find the version file.
+   * @return the installed version or null if not installed.
+   */
+  @Override
+  protected VersionIdentifier getInstalledVersion(Path toolPath) {
+    return getInstalledVersion();
+  }
+
   @Override
   protected final void performToolInstallation(ToolInstallRequest request, Path installationPath) {
 
     PackageManagerRequest packageManagerRequest = new PackageManagerRequest(PackageManagerRequest.TYPE_INSTALL, getPackageName())
         .setProcessContext(request.getProcessContext()).setVersion(request.getRequested().getResolvedVersion());
-    runPackageManager(packageManagerRequest, true).failOnError();
+    runPackageManager(packageManagerRequest, isSkipInstallation()).failOnError();
     this.installedVersion.invalidate();
+  }
+
+  /**
+   * @return {@code false} if the underlying {@link #getPackageManagerClass() package manager} should also be installed, {@code false} to skip that additional
+   *     installation (e.g. to prevent infinite loop in case of cyclic dependencies between package manager based tools such as node and npm).
+   */
+  protected boolean isSkipInstallation() {
+    return false;
   }
 
   /**
@@ -198,7 +222,7 @@ public abstract class PackageManagerBasedLocalToolCommandlet<P extends ToolComma
       runPackageManager(request).failOnError();
       this.installedVersion.invalidate();
     } else {
-      this.context.info("IDEasy does not support uninstalling the tool {} since this will break your installation.\n"
+      LOG.info("IDEasy does not support uninstalling the tool {} since this will break your installation.\n"
           + "If you really want to uninstall it, please uninstall its parent tool via:\n"
           + "ide uninstall {}", this.tool, getParentTool().getName());
     }

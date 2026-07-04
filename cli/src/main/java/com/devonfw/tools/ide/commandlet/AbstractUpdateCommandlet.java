@@ -9,6 +9,9 @@ import java.util.List;
 import java.util.Set;
 import java.util.stream.Stream;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import com.devonfw.tools.ide.cli.CliException;
 import com.devonfw.tools.ide.context.AbstractIdeContext;
 import com.devonfw.tools.ide.context.IdeContext;
@@ -37,6 +40,8 @@ import com.devonfw.tools.ide.version.VersionIdentifier;
  * Abstract {@link Commandlet} base-class for both {@link UpdateCommandlet} and {@link CreateCommandlet}.
  */
 public abstract class AbstractUpdateCommandlet extends Commandlet {
+
+  private static final Logger LOG = LoggerFactory.getLogger(AbstractUpdateCommandlet.class);
 
   private static final String MESSAGE_CODE_REPO_URL = """
       No code repository was given after '--code'.
@@ -85,16 +90,14 @@ public abstract class AbstractUpdateCommandlet extends Commandlet {
   }
 
   @Override
-  public void run() {
+  protected void doRun() {
 
     IdeStartContextImpl startContext = ((AbstractIdeContext) this.context).getStartContext();
     startContext.setForcePull(forcePull.isTrue());
     startContext.setForcePlugins(forcePlugins.isTrue());
     startContext.setForceRepositories(forceRepositories.isTrue());
 
-    if (!this.context.isSettingsRepositorySymlinkOrJunction() || this.context.isForceMode() || forcePull.isTrue()) {
-      updateSettings();
-    }
+    updateSettings();
     updateConf();
     reloadContext();
 
@@ -116,7 +119,7 @@ public abstract class AbstractUpdateCommandlet extends Commandlet {
       if (Files.exists(legacyTemplatesFolder)) {
         templatesFolder = legacyTemplatesFolder;
       } else {
-        this.context.warning("Templates folder is missing in settings repository.");
+        LOG.warn("Templates folder is missing in settings repository.");
         return;
       }
     }
@@ -141,10 +144,10 @@ public abstract class AbstractUpdateCommandlet extends Commandlet {
         setupConf(child, confPath);
       } else if (Files.isRegularFile(child)) {
         if (Files.isRegularFile(confPath)) {
-          this.context.debug("Configuration {} already exists - skipping to copy from {}", confPath, child);
+          LOG.debug("Configuration {} already exists - skipping to copy from {}", confPath, child);
         } else {
           if (!basename.equals("settings.xml")) {
-            this.context.info("Copying template {} to {}.", child, conf);
+            LOG.info("Copying template {} to {}.", child, conf);
             this.context.getFileAccess().copy(child, conf);
           }
         }
@@ -158,7 +161,12 @@ public abstract class AbstractUpdateCommandlet extends Commandlet {
    */
   protected void updateSettings() {
 
-    this.context.newStep(getStepMessage()).run(this::updateSettingsInStep);
+    boolean codeRepository = this.context.isSettingsCodeRepository();
+    if (codeRepository && !(this.context.isForceMode() || forcePull.isTrue())) {
+      LOG.info("Skipping git pull in settings due to code repository. Use --force-pull to enforce pulling.");
+      return;
+    }
+    this.context.newStep(getStepMessage()).run(() -> updateSettingsInStep(codeRepository));
   }
 
   protected String getStepMessage() {
@@ -166,22 +174,34 @@ public abstract class AbstractUpdateCommandlet extends Commandlet {
     return "update (pull) settings repository";
   }
 
-  private void updateSettingsInStep() {
+  private void updateSettingsInStep(boolean codeRepository) {
     Path settingsPath = this.context.getSettingsPath();
-    GitContext gitContext = this.context.getGitContext();
-    // here we do not use pullOrClone to prevent asking a pointless question for repository URL...
-    if (Files.isDirectory(settingsPath) && !this.context.getFileAccess().isEmptyDir(settingsPath)) {
-      if (this.context.isForcePull() || this.context.isForceMode() || Files.isDirectory(settingsPath.resolve(GitContext.GIT_FOLDER))) {
-        gitContext.pull(settingsPath);
-        this.context.getGitContext().saveCurrentCommitId(settingsPath, this.context.getSettingsCommitIdPath());
-      } else {
-        this.context.info("Skipping git pull in settings due to code repository. Use --force-pull to enforce pulling.");
+    if (!codeRepository) {
+      boolean settingsRepository = this.context.getGitContext().isGitRepo(settingsPath);
+      if (!settingsRepository) {
+        if (Files.exists(settingsPath)) {
+          if (!this.context.getFileAccess().isEmptyDir(settingsPath)) {
+            this.context.askToContinue(
+                "Your settings repository seems to be broken ('.git' folder not present). "
+                    + "We can fix this by moving  your settings the backed up. You will be asked for the settings git URL and your settings will be cloned from scratch. "
+                    + "Do you want to proceed?"
+            );
+          }
+          this.context.getFileAccess().backup(settingsPath);
+        }
+        GitUrl gitUrl = getOrAskSettingsUrl();
+        checkProjectNameConvention(gitUrl.getProjectName());
+        initializeRepository(gitUrl);
+        return;
       }
-    } else {
-      GitUrl gitUrl = getOrAskSettingsUrl();
-      checkProjectNameConvention(gitUrl.getProjectName());
-      initializeRepository(gitUrl);
     }
+    GitContext gitContext = this.context.getGitContext();
+    if (gitContext.hasUntrackedFiles(settingsPath)) {
+      gitContext.pullSafelyWithStash(settingsPath);
+    } else {
+      gitContext.pull(settingsPath);
+    }
+    this.context.getGitContext().saveCurrentCommitId(settingsPath, this.context.getSettingsCommitIdPath());
   }
 
   private GitUrl getOrAskSettingsUrl() {
@@ -193,11 +213,11 @@ public abstract class AbstractUpdateCommandlet extends Commandlet {
     if (isCodeRepository()) {
       userPromt = "Code repository URL:";
       defaultUrl = null;
-      this.context.info(MESSAGE_CODE_REPO_URL);
+      LOG.info(MESSAGE_CODE_REPO_URL);
     } else {
       userPromt = "Settings URL [" + IdeContext.DEFAULT_SETTINGS_REPO_URL + "]:";
       defaultUrl = IdeContext.DEFAULT_SETTINGS_REPO_URL;
-      this.context.info(MESSAGE_SETTINGS_REPO_URL, this.context.getSettingsPath());
+      LOG.info(MESSAGE_SETTINGS_REPO_URL, this.context.getSettingsPath());
     }
     GitUrl gitUrl = null;
     if (repository != null) {
@@ -208,7 +228,7 @@ public abstract class AbstractUpdateCommandlet extends Commandlet {
       repository = handleDefaultRepository(repository);
       gitUrl = GitUrl.of(repository);
       if (!gitUrl.isValid()) {
-        this.context.warning("The input URL is not valid, please try again.");
+        LOG.warn("The input URL is not valid, please try again.");
       }
     }
     return gitUrl;
@@ -217,10 +237,10 @@ public abstract class AbstractUpdateCommandlet extends Commandlet {
   private String handleDefaultRepository(String repository) {
     if ("-".equals(repository)) {
       if (isCodeRepository()) {
-        this.context.warning("'-' is found after '--code'. This is invalid.");
+        LOG.warn("'-' is found after '--code'. This is invalid.");
         repository = null;
       } else {
-        this.context.info("'-' was found for settings repository, the default settings repository '{}' will be used.", IdeContext.DEFAULT_SETTINGS_REPO_URL);
+        LOG.info("'-' was found for settings repository, the default settings repository '{}' will be used.", IdeContext.DEFAULT_SETTINGS_REPO_URL);
         repository = IdeContext.DEFAULT_SETTINGS_REPO_URL;
       }
     }
@@ -243,8 +263,7 @@ public abstract class AbstractUpdateCommandlet extends Commandlet {
             Therefore we assume that you forgot to add the '--code' option to the ide project creation.
             Do you really want to create the project?""";
       }
-      this.context.askToContinue(warningTemplate, projectName,
-          IdeContext.SETTINGS_REPOSITORY_KEYWORD);
+      this.context.askToContinue(warningTemplate, projectName, IdeContext.SETTINGS_REPOSITORY_KEYWORD);
     }
   }
 
@@ -275,7 +294,7 @@ public abstract class AbstractUpdateCommandlet extends Commandlet {
   private void updateSoftware() {
 
     if (this.skipTools.isTrue()) {
-      this.context.info("Skipping installation/update of tools as specified by the user.");
+      LOG.info("Skipping installation/update of tools as specified by the user.");
       return;
     }
     Step step = this.context.newStep("Install or update software");
@@ -303,7 +322,7 @@ public abstract class AbstractUpdateCommandlet extends Commandlet {
         ToolCommandlet toolCommandlet = commandletManager.getToolCommandlet(regularTool);
         if (toolCommandlet == null) {
           String displayName = (regularTool == null || regularTool.isBlank()) ? "<empty>" : "'" + regularTool + "'";
-          this.context.error("Cannot install or update tool '{}''. No matching commandlet found. Please check your IDE_TOOLS configuration.", displayName);
+          LOG.error("Cannot install or update tool '{}''. No matching commandlet found. Please check your IDE_TOOLS configuration.", displayName);
         } else {
           toolCommandlets.add(toolCommandlet);
         }
@@ -324,7 +343,7 @@ public abstract class AbstractUpdateCommandlet extends Commandlet {
     ExtraTools extraTools = ExtraToolsMapper.get().loadJsonFromFolder(this.context.getSettingsPath());
     if (extraTools != null) {
       List<String> toolNames = extraTools.getSortedToolNames();
-      this.context.info("Found extra installation of the following tools: {}", toolNames);
+      LOG.info("Found extra installation of the following tools: {}", toolNames);
       for (String tool : toolNames) {
         List<ExtraToolInstallation> installations = extraTools.getExtraInstallations(tool);
         this.context.newStep("Install extra version(s) of " + tool).run(() -> installExtraToolInstallations(tool, installations));
@@ -358,9 +377,9 @@ public abstract class AbstractUpdateCommandlet extends Commandlet {
 
     if (this.skipRepositories.isTrue()) {
       if (this.forceRepositories.isTrue()) {
-        this.context.warning("Options to skip and force repositories are incompatible and should not be combined. Ignoring --force-repositories to proceed.");
+        LOG.warn("Options to skip and force repositories are incompatible and should not be combined. Ignoring --force-repositories to proceed.");
       }
-      this.context.info("Skipping setup of repositories as specified by the user.");
+      LOG.info("Skipping setup of repositories as specified by the user.");
       return;
     }
     RepositoryCommandlet repositoryCommandlet = this.context.getCommandletManager().getCommandlet(RepositoryCommandlet.class);
@@ -372,13 +391,13 @@ public abstract class AbstractUpdateCommandlet extends Commandlet {
 
     List<String> ides = IdeVariables.CREATE_START_SCRIPTS.get(this.context);
     if (ides == null) {
-      this.context.info("Variable CREATE_START_SCRIPTS is undefined - skipping start script creation.");
+      LOG.info("Variable CREATE_START_SCRIPTS is undefined - skipping start script creation.");
       return;
     }
     for (String ide : ides) {
       ToolCommandlet tool = this.context.getCommandletManager().getToolCommandlet(ide);
       if (tool == null) {
-        this.context.error("Undefined IDE '{}' configured in variable CREATE_START_SCRIPTS.");
+        LOG.error("Undefined IDE '{}' configured in variable CREATE_START_SCRIPTS.", ide);
       } else {
         createStartScript(ide);
       }
@@ -387,7 +406,7 @@ public abstract class AbstractUpdateCommandlet extends Commandlet {
 
   private void createStartScript(String ide) {
 
-    this.context.info("Creating start scripts for {}", ide);
+    LOG.info("Creating start scripts for {}", ide);
     Path workspaces = this.context.getIdeHome().resolve(IdeContext.FOLDER_WORKSPACES);
     try (Stream<Path> childStream = Files.list(workspaces)) {
       Iterator<Path> iterator = childStream.iterator();
@@ -418,16 +437,9 @@ public abstract class AbstractUpdateCommandlet extends Commandlet {
     }
     String scriptContent;
     if (windows) {
-      scriptContent = "@echo off\r\n"
-          + "pushd %~dp0\r\n"
-          + "cd workspaces/" + workspace + "\r\n"
-          + "call ide " + ide + "\r\n"
-          + "popd\r\n";
+      scriptContent = "@echo off\r\n" + "pushd %~dp0\r\n" + "cd workspaces/" + workspace + "\r\n" + "call ide " + ide + "\r\n" + "popd\r\n";
     } else {
-      scriptContent = "#!/usr/bin/env bash\n"
-          + "cd \"$(dirname \"$0\")\"\n"
-          + "cd workspaces/" + workspace + "\n"
-          + "ideasy " + ide + "\n";
+      scriptContent = "#!/usr/bin/env bash\n" + "cd \"$(dirname \"$0\")\"\n" + "cd workspaces/" + workspace + "\n" + "ideasy " + ide + "\n";
     }
     FileAccess fileAccess = this.context.getFileAccess();
     fileAccess.writeFileContent(scriptContent, scriptPath);
