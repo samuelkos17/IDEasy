@@ -1,0 +1,98 @@
+:toc:
+toc::[]
+
+= Artificial Intelligence
+
+`IDEasy` supports to bring AI to your teams boosting their efficiency.
+Mainly this is just done with generic features that can be also used for AI.
+This guide gives some special hints to make your project and team `AI ready` with the help of IDEasy.
+
+== AI Tools
+
+IDEasy integrates many tools that you can install automatically including the CLI of famous AI tools like GitHub Copilot or Claude Code.
+Therefore, simply install it via `ide install «tool» [«version»]` to your project.
+
+To automatically install tools for all team members on link:project.adoc[project] creation, simply add them to the link:variables.adoc[variable] `IDE_TOOLS`.
+For further details see also link:software.adoc[software].
+
+[NOTE]
+====
+If an AI tool is not yet available in IDEasy, you can create a https://github.com/devonfw/IDEasy/issues/new?template=feature_request.yml[feature-request].
+====
+
+== AI Plugins
+
+IDEasy can automatically install arbitrary plugins into the IDE of your choice (IntelliJ, Eclipse, VSCode, etc.) as described in the link:plugin.adoc[plugin] section.
+
+Typically, developers want to have the AI integrated into their IDE.
+Therefore, we already preconfigured and tagged common AI plugins for various IDEs.
+To give an example, let's assume you are using IntelliJ and you want to use GitHub Copilot you can find the plugin configuration https://github.com/devonfw/ide-settings/blob/main/intellij/plugins/GitHubCopilot.properties[here].
+In your forked settings ensure that all your desired plugins are activated via
+
+```
+active=true
+```
+
+[NOTE]
+====
+If you are using older settings, the property may still be named `plugin_active`.
+This is a legacy name for compatibility with older __devonfw-ide __versions.
+====
+
+== AI Config
+
+Your AI tools shall be configured and tailored to the needs of your project.
+This includes aspects like instructions, skills, hooks, etc.
+However, common AI tools expect them in configuration folders directly in your workspace top-level directory.
+Even worse there is no common standard yet and every AI tool has its own naming conventions.
+To avoid anti-patterns and still give you high flexibility and usability, we created a special feature to automatically create additional symbolic links after cloning of a link:repository.adoc[repository].
+
+The following repository configuration in `$IDE_HOME/settings/repositories/ai.properties` illustrates the idea as example:
+
+```
+path=ai
+git_url=https://github.com/devonfw/example-ai-repo.git
+workspaces=*
+link=.claude,.github,.kiro
+active=true
+tags=ai
+```
+
+This will clone the specified git repository into the sub-folder `ai` of your workspace `main` and also link it to every additional workspace you have (`workspaces=*`).
+Further it will create the specified symbolic links in your workspace pointing to the `ai` repository.
+
+This will result in the following structure in each of your workspaces:
+
+```
+/
+├──/ .claude/ → ai/
+├──/ .github/ → ai/
+├──/ .kiro/ → ai/
+├──/ ai/
+│  ├──/ hooks/
+│  ├──/ rules/
+│  ├──/ skills/
+│  ├──/ steering/
+│  ├──/ CLAUDE.md
+│  └──/ copilot-instructions.md
+└──/ .../
+```
+
+This is just an example.
+Typically, you will only need support for a single type of AI.
+If your repository already contains tool-specific folders (e.g. `.github`` for Copilot), simply configure something like this:
+
+```
+link=.github=.github
+```
+
+This will create a symbolic link called `.github` pointing to the `.github` folder inside your git repository (e.g. `ai/.github`).
+
+However, you can also map specific subfolders:
+
+```
+.github/hooks=myhooks/github
+```
+
+So if your git repo would contain the hooks for GitHub Copilot in the folder `myhooks/github` those will be linked to appear as `.github/hooks` in your workspace.
+We hope this gives you ultimate flexibility to solve all problems you may have.

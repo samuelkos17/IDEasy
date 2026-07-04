@@ -1,15 +1,24 @@
 package com.devonfw.tools.ide.url.tool.helm;
 
 import com.devonfw.tools.ide.url.model.folder.UrlVersion;
-import com.devonfw.tools.ide.url.updater.GithubUrlUpdater;
+import com.devonfw.tools.ide.url.updater.GithubUrlTagUpdater;
 import com.devonfw.tools.ide.version.VersionIdentifier;
 
 /**
- * {@link GithubUrlUpdater} for "helm".
+ * {@link GithubUrlTagUpdater} for "helm".
  */
-public class HelmUrlUpdater extends GithubUrlUpdater {
+public class HelmUrlUpdater extends GithubUrlTagUpdater {
+
+  private static final String DOWNLOAD_BASE_URL = "https://get.helm.sh";
 
   private static final VersionIdentifier MIN_MAC_ARM_VID = VersionIdentifier.of("3.4.0");
+
+  /**
+   * The Constructor.
+   */
+  public HelmUrlUpdater() {
+    super(DOWNLOAD_BASE_URL);
+  }
 
   @Override
   public String getTool() {
@@ -25,24 +34,6 @@ public class HelmUrlUpdater extends GithubUrlUpdater {
 
   @Override
   protected String getGithubOrganization() {
-
-    return "helm";
-  }
-
-  @Override
-  protected String getDownloadBaseUrl() {
-
-    return "https://get.helm.sh";
-  }
-
-  @Override
-  public String getCpeVendor() {
-
-    return "helm";
-  }
-
-  @Override
-  public String getCpeProduct() {
 
     return "helm";
   }
@@ -67,5 +58,16 @@ public class HelmUrlUpdater extends GithubUrlUpdater {
     return super.mapVersion("v" + version);
   }
 
+  @Override
+  public String getCpeVendor() {
+
+    return "helm";
+  }
+
+  @Override
+  public String getCpeProduct() {
+
+    return "helm";
+  }
 
 }

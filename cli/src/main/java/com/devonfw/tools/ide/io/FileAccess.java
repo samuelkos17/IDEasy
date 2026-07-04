@@ -124,12 +124,13 @@ public interface FileAccess {
   }
 
   /**
-   * Creates a link. If the given {@code link} already exists and is a symbolic link or a Windows junction, it will be replaced. In case of missing privileges,
-   * Windows mklink may be used as fallback, which must point to absolute paths. In such case the {@code relative} flag will be ignored.
+   * Creates a link. If the given {@code link} already exists and is a symbolic link or a Windows junction, it will be replaced. On Windows, mklink may be used
+   * as fallback if native link creation is not allowed.
    *
    * @param source the source {@link Path} to link to, may be relative or absolute.
    * @param link the destination {@link Path} where the link shall be created pointing to {@code source}.
-   * @param relative - {@code true} if the link shall be relative, {@code false} if it shall be absolute.
+   * @param relative {@code true} to calculate a relative target from {@code link} to {@code source}; {@code false} to use {@code source} as passed in, apart
+   *     from normalizing {@code .} and {@code ..} segments.
    * @param type the {@link PathLinkType}.
    */
   void link(Path source, Path link, boolean relative, PathLinkType type);
@@ -138,7 +139,7 @@ public interface FileAccess {
    * @param link the {@link PathLink} to {@link #link(Path, Path, boolean, PathLinkType) create}.
    */
   default void link(PathLink link) {
-    link(link.source(), link.link(), true, link.type());
+    link(link.source(), link.link(), false, link.type());
   }
 
   /**
@@ -344,6 +345,33 @@ public interface FileAccess {
    *     {@code directory} or {@code null} if no such {@link Path} exists.
    */
   Path findAncestor(Path path, Path baseDir, int subfolderCount);
+
+  /**
+   * @param path the {@link Path} to get the rest from the given starting position.
+   * @param nameEnd the end position in the range from 0 to {@link Path#getNameCount() nameCount}-1.
+   * @return the requested start of the {@link Path} including all {@link Path#getName(int) name segments} from the start to the given position (inclusive). If
+   *     an {@link Path#isAbsolute() absolute} {@link Path} was given, then also an {@link Path#isAbsolute() absolute} {@link Path} will be returned.
+   */
+  Path getPathStart(Path path, int nameEnd);
+
+  /**
+   * @param path the {@link Path} to get the rest from the given starting position.
+   * @param nameStart the starting position in the range from 0 to {@link Path#getNameCount() nameCount}-1.
+   * @return the requested end of the {@link Path}. This will always be a relative {@link Path} even if the given {@link Path} was
+   *     {@link Path#isAbsolute() absolute}.
+   */
+  Path getPathEnd(Path path, int nameStart);
+
+  /**
+   * @param path1 the first {@link Path} to compare.
+   * @param path2 the second {@link Path} to compare.
+   * @return the first {@link Path#getName(int) name index} for which the {@link Path#getName(int) segments} of both given {@link Path}s differ. Will be
+   *     {@code -1} if a given {@link Path} was {@code null} or both {@link Path} do not even share the same {@link Path#getRoot() roots} (e.g. different
+   *     Windows drives or one {@link Path} is {@link Path#isAbsolute() absolute} and one is relative). Otherwise, will be {@code 0} if already the first
+   *     segments differ or positive for the number of common segments. So the returned number is the index of the first {@link Path#getName(int) name segment}
+   *     that does not match (or is not present).
+   */
+  int getCommonNameCount(Path path1, Path path2);
 
   /**
    * @param dir the {@link Path} to the directory where to list the children.
@@ -606,4 +634,5 @@ public interface FileAccess {
    * @return if the given {@code file} exists and is not empty.
    */
   boolean isNonEmptyFile(Path file);
+
 }

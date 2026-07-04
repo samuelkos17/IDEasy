@@ -1,10 +1,14 @@
 package com.devonfw.tools.ide.version;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
+import java.util.stream.Collectors;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import com.devonfw.tools.ide.cli.CliException;
-import com.devonfw.tools.ide.log.IdeLogger;
 import com.devonfw.tools.ide.tool.ToolCommandlet;
 import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.databind.annotation.JsonSerialize;
@@ -14,6 +18,8 @@ import com.fasterxml.jackson.databind.annotation.JsonSerialize;
  * {@link VersionIdentifier}s.
  */
 public final class VersionIdentifier implements VersionObject<VersionIdentifier>, GenericVersionRange {
+
+  private static final Logger LOG = LoggerFactory.getLogger(VersionIdentifier.class);
 
   /** {@link VersionIdentifier} "*" that will resolve to the latest stable version. */
   public static final VersionIdentifier LATEST = new VersionIdentifier(VersionSegment.of("*"));
@@ -64,29 +70,59 @@ public final class VersionIdentifier implements VersionObject<VersionIdentifier>
    * @param versions the
    *     {@link com.devonfw.tools.ide.tool.repository.ToolRepository#getSortedVersions(String, String, ToolCommandlet) available versions, sorted in descending
    *     order}.
-   * @param logger the {@link IdeLogger}.
    * @return the resolved version
    */
-  public static VersionIdentifier resolveVersionPattern(GenericVersionRange version, List<VersionIdentifier> versions, IdeLogger logger) {
+  public static VersionIdentifier resolveVersionPattern(GenericVersionRange version, List<VersionIdentifier> versions) {
     if (version == null) {
       version = LATEST;
     }
     if (!version.isPattern()) {
       for (VersionIdentifier vi : versions) {
         if (vi.equals(version)) {
-          logger.debug("Resolved version {} to version {}", version, vi);
+          LOG.debug("Resolved version {} to version {}", version, vi);
           return vi;
         }
       }
     }
     for (VersionIdentifier vi : versions) {
       if (version.contains(vi)) {
-        logger.debug("Resolved version pattern {} to version {}", version, vi);
+        LOG.debug("Resolved version pattern {} to version {}", version, vi);
         return vi;
       }
     }
+    List<VersionIdentifier> closest = findClosestVersions(version, versions, 5);
+    String closestStr = closest.stream().map(Object::toString).collect(Collectors.joining(", "));
     throw new CliException(
-        "Could not find any version matching '" + version + "' - there are " + versions.size() + " version(s) available but none matched!");
+        "Could not find any version matching '" + version + "' - there are " + versions.size()
+            + " version(s) available but none matched!\nDid you mean one of: " + closestStr + "?");
+  }
+
+  /**
+   * Finds the closest versions to the requested version pattern by matching the major version segment.
+   *
+   * @param version the requested version pattern or version.
+   * @param versions the available versions to choose from.
+   * @param maxCount the maximum number of versions to return.
+   * @return a list of the closest matching versions.
+   */
+  private static List<VersionIdentifier> findClosestVersions(GenericVersionRange version, List<VersionIdentifier> versions, int maxCount) {
+
+    if (version instanceof VersionIdentifier vi && !vi.isPattern()) {
+      long requestedMajor = vi.getStart().getNumber();
+      List<VersionIdentifier> majorMatches = new ArrayList<>();
+      for (VersionIdentifier v : versions) {
+        if (v.getStart().getNumber() == requestedMajor) {
+          majorMatches.add(v);
+          if (majorMatches.size() >= maxCount) {
+            break;
+          }
+        }
+      }
+      if (!majorMatches.isEmpty()) {
+        return majorMatches;
+      }
+    }
+    return versions.size() <= maxCount ? versions : versions.subList(0, maxCount);
   }
 
   /**

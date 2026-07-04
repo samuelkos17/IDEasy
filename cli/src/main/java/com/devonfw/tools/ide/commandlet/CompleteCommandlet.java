@@ -13,6 +13,9 @@ import com.devonfw.tools.ide.property.StringProperty;
  */
 public final class CompleteCommandlet extends Commandlet {
 
+  /** The name of the complete commandlet. */
+  public static final String NAME = "complete";
+
   /** {@link StringProperty} with the current CLI arguments to complete. */
   public final StringProperty args;
 
@@ -31,7 +34,7 @@ public final class CompleteCommandlet extends Commandlet {
   @Override
   public String getName() {
 
-    return "complete";
+    return NAME;
   }
 
   @Override
@@ -47,7 +50,7 @@ public final class CompleteCommandlet extends Commandlet {
   }
 
   @Override
-  public void run() {
+  protected void doRun() {
 
     CliArguments arguments = CliArguments.ofCompletion(this.args.asArray());
     List<CompletionCandidate> candidates = ((AbstractIdeContext) this.context).complete(arguments, true);
