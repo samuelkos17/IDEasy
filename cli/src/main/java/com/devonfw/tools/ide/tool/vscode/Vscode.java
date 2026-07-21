@@ -51,13 +51,8 @@ public class Vscode extends IdeToolCommandlet {
 
   @Override
   protected Path getPluginsConfigPath() {
+    // Kept for potential backward-compatibility fallback
 
-    if (EDITION_VSCODIUM.equals(getConfiguredEdition())) {
-      Path vscodiumPluginsPath = this.context.getSettingsPath().resolve(EDITION_VSCODIUM).resolve(IdeContext.FOLDER_PLUGINS);
-      if (Files.isDirectory(vscodiumPluginsPath)) {
-        return vscodiumPluginsPath;
-      }
-    }
     return super.getPluginsConfigPath();
   }
 

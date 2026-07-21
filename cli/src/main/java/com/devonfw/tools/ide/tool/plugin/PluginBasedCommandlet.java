@@ -159,6 +159,10 @@ public abstract class PluginBasedCommandlet extends LocalToolCommandlet {
     long currentPluginIndex = 1;
     long totalActivePlugins = plugins.stream().filter(ToolPluginDescriptor::active).count();
     for (ToolPluginDescriptor plugin : plugins) {
+      if (plugin.excludedEditions().contains(getConfiguredEdition())) {
+        LOG.debug("Skipping plugin '{}' (excluded for edition '{}').", plugin.name(), getConfiguredEdition());
+        continue;
+      }
       Path pluginMarkerFile = retrievePluginMarkerFilePath(plugin);
       boolean pluginMarkerFileExists = pluginMarkerFile != null && Files.exists(pluginMarkerFile);
       if (pluginMarkerFileExists) {
