@@ -338,4 +338,42 @@ class CompleteTest extends AbstractIdeContextTest {
     assertThat(candidates.stream().map(CompletionCandidate::text))
         .contains("--purge", "--settings", "--completion", "dependency:list", "dependency:tree", "-DskipTests");
   }
+
+  /**
+   * Test that synonyms and canonical candidates are not suggested when the canonical candidate has already been provided.
+   */
+  @Test
+  void testSynonymFilteringWithProvidedCanonicalCandidate() {
+
+    // arrange
+    AbstractIdeContext context = newContext(PROJECT_BASIC, null, false);
+    CliArguments args = CliArguments.ofCompletion("-b", "");
+
+    // act
+    List<CompletionCandidate> candidates = context.complete(args, true);
+
+    // assert
+    List<String> texts = candidates.stream().map(CompletionCandidate::text).toList();
+    assertThat(texts).doesNotContain("--batch");
+    assertThat(texts).doesNotContain("-b");
+  }
+
+  /**
+   * Test that synonyms and canonical candidates are not suggested when the synonym has already been provided.
+   */
+  @Test
+  void testSynonymFilteringWithProvidedSynonym() {
+
+    // arrange
+    AbstractIdeContext context = newContext(PROJECT_BASIC, null, false);
+    CliArguments args = CliArguments.ofCompletion("--batch", "");
+
+    // act
+    List<CompletionCandidate> candidates = context.complete(args, true);
+
+    // assert
+    List<String> texts = candidates.stream().map(CompletionCandidate::text).toList();
+    assertThat(texts).doesNotContain("-b");
+    assertThat(texts).doesNotContain("--batch");
+  }
 }
