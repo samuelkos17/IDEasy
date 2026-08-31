@@ -34,13 +34,15 @@ on:
         description: 'Report only (true) or apply assignee changes (false)'
         type: choice
         default: 'true'
-        options: ['true', 'false']
+        options: [ 'true', 'false' ]
 
 permissions:
   contents: read
-  # "write" is required for the Team Reviewer field write
-  # (updateProjectV2ItemFieldValue); read alone would make it 403 in apply mode.
-  projects: write
+  # The Projects permission is named "repository-projects" (there is no
+  # "projects" key); its values are read/write/none ("write-all" only exists
+  # for the "contents" scope). "write" grants the write:project scope that
+  # the Team Reviewer field write (updateProjectV2ItemFieldValue) needs.
+  repository-projects: write
   issues: write
   pull-requests: write
 
