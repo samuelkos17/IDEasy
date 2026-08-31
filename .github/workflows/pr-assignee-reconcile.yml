@@ -47,7 +47,15 @@ permissions:
   pull-requests: write
 
 env:
-  GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  # Token used for the API calls. The script reads GH_TOKEN first. If a
+  # RECONCILE_PAT secret is present (a PAT with the "project" scope) it is used;
+  # otherwise it falls back to the built-in GITHUB_TOKEN.
+  # WHY a PAT is needed for fork / personal-board testing: the GITHUB_TOKEN is
+  # scoped to THIS repository and cannot see a user account's project board
+  # (boards under /users/<name>/projects/...), nor write to it. A personal PAT
+  # with the "project" scope can read AND write your own boards. In production
+  # the RECONCILE_PAT secret is absent, so this resolves to the GITHUB_TOKEN.
+  GH_TOKEN: ${{ secrets.RECONCILE_PAT || secrets.GITHUB_TOKEN }}
   # Account that owns the board: org for production (devonfw), but a USER
   # account when testing in a fork / personal board. The script looks up both.
   # >>> FORK TEST: currently set to the user account + that board's column

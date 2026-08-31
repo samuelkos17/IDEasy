@@ -171,6 +171,32 @@ async function graphql(query, variables) {
   return json.data;
 }
 
+/**
+ * Like {@link graphql}, but treats a GraphQL NOT_FOUND as "the thing was not
+ * found here" (returns `null`) instead of aborting the run. Used by the board
+ * lookup: the account may be a USER (fork/personal board) or an ORGANIZATION,
+ * so the query for whichever account type does not exist is expected to come
+ * back NOT_FOUND and must not be fatal. Any other error is still fatal.
+ */
+async function graphqlTolerantNotFound(query, variables) {
+  const res = await fetch(`${API}/graphql`, {
+    method: 'POST',
+    headers: headers(),
+    body: JSON.stringify({ query, variables }),
+  });
+  if (!res.ok) {
+    fail(`GraphQL HTTP ${res.status}: ${await res.text()}`);
+  }
+  const json = await res.json();
+  if (json.errors?.length) {
+    if (json.errors.every((e) => e.type === 'NOT_FOUND')) {
+      return null;
+    }
+    fail(`GraphQL error: ${JSON.stringify(json.errors)}`);
+  }
+  return json.data;
+}
+
 async function rest(method, path, body) {
   const res = await fetch(`${API}${path}`, {
     method,
@@ -217,8 +243,9 @@ async function findField(boardId, fieldName) {
 async function findBoard(login, title) {
   // The board owner is a GitHub account of unknown type: try the user
   // account first (personal / fork boards live there), then the organization
-  // (the production case, e.g. devonfw). Each lookup runs its own query so a
-  // NOT_FOUND for the absent account type is tolerated instead of aborting.
+  // (the production case, e.g. devonfw). Each lookup runs its own query, and
+  // a NOT_FOUND — "this account type does not exist" (the fork is a user, so
+  // no org by that login) — is tolerated and the next account type is tried.
   const lookups = [
     { query: USER_BOARDS_QUERY, field: 'user' },
     { query: ORG_BOARDS_QUERY, field: 'organization' },
@@ -226,10 +253,10 @@ async function findBoard(login, title) {
   for (const { query, field } of lookups) {
     let after = null;
     for (let page = 0; page < 50; page++) {
-      const data = await graphql(query, { login, after });
-      const proj = data[field]?.projectsV2;
+      const data = await graphqlTolerantNotFound(query, { login, after });
+      const proj = data?.[field]?.projectsV2;
       if (!proj) {
-        break; // this account type does not exist; try the next one
+        break; // account does not exist or has no boards; try the next one
       }
       for (const node of proj.nodes) {
         if (node.title === title) {
