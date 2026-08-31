@@ -355,8 +355,11 @@ async function applyAssignees(repo, number, toAdd, toRemove) {
       return;
     }
   }
+  // Remove via a JSON body { assignees: [...] } — the API retired the old
+  // "?assignee=<login>" query form (it now 400s "Body should be a JSON
+  // object"). Mirrors the add call above, which already uses the body form.
   for (const login of toRemove) {
-    const r = await rest('DELETE', `/repos/${repo}/issues/${number}/assignees?assignee=${encodeURIComponent(login)}`);
+    const r = await rest('DELETE', `/repos/${repo}/issues/${number}/assignees`, { assignees: [login] });
     if (!r.ok) {
       console.warn(`[reconcile]   ! could not unassign ${login} on ${repo}#${number}`);
     }
