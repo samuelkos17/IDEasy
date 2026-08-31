@@ -34,7 +34,10 @@
 //                            there is logged and skipped (not fatal), so the
 //                            invariant only holds for in-repo PRs. For
 //                            cross-repo writes, use an org-scoped PAT as GH_TOKEN.
-//   GH_ORG                   organization that owns the board        (default: devonfw)
+//   GH_ACCOUNT               GitHub account (user OR organization) that owns
+//                            the board (default: devonfw). Personal / fork
+//                            boards live under a user account, so both are
+//                            searched (user first, then org).
 //   BOARD_TITLE              board title to manage                    (default: "IDEasy board")
 //   TEAM_REVIEW_COLUMN       Status option that means "under team review"
 //                            (default: "Team Review")
@@ -53,9 +56,24 @@ import { COLUMNS, computeTarget, computeDiff } from './reconcile-core.mjs';
 
 const API = 'https://api.github.com';
 
+// Boards are looked up separately for the user and the org account of the
+// same login, because a combined `user + organization` query in one request
+// makes GitHub return a NOT_FOUND error for whichever account type does not
+// exist — and the graphql() helper treats any error as fatal.
+const USER_BOARDS_QUERY = `
+query ($login: String!, $after: String) {
+  user(login: $login) {
+    projectsV2(first: 100, after: $after) {
+      nodes { id title }
+      pageInfo { hasNextPage endCursor }
+    }
+  }
+}
+`;
+
 const ORG_BOARDS_QUERY = `
-query ($org: String!, $after: String) {
-  organization(login: $org) {
+query ($login: String!, $after: String) {
+  organization(login: $login) {
     projectsV2(first: 100, after: $after) {
       nodes { id title }
       pageInfo { hasNextPage endCursor }
@@ -196,22 +214,35 @@ async function findField(boardId, fieldName) {
   return node ? { id: node.id, name: node.name } : null;
 }
 
-async function findBoard(org, title) {
-  let after = null;
-  for (let page = 0; page < 50; page++) {
-    const data = await graphql(ORG_BOARDS_QUERY, { org, after });
-    const proj = data.organization.projectsV2;
-    for (const node of proj.nodes) {
-      if (node.title === title) {
-        return { id: node.id, title: node.title };
+async function findBoard(login, title) {
+  // The board owner is a GitHub account of unknown type: try the user
+  // account first (personal / fork boards live there), then the organization
+  // (the production case, e.g. devonfw). Each lookup runs its own query so a
+  // NOT_FOUND for the absent account type is tolerated instead of aborting.
+  const lookups = [
+    { query: USER_BOARDS_QUERY, field: 'user' },
+    { query: ORG_BOARDS_QUERY, field: 'organization' },
+  ];
+  for (const { query, field } of lookups) {
+    let after = null;
+    for (let page = 0; page < 50; page++) {
+      const data = await graphql(query, { login, after });
+      const proj = data[field]?.projectsV2;
+      if (!proj) {
+        break; // this account type does not exist; try the next one
       }
+      for (const node of proj.nodes) {
+        if (node.title === title) {
+          return { id: node.id, title: node.title };
+        }
+      }
+      if (!proj.pageInfo.hasNextPage) {
+        break;
+      }
+      after = proj.pageInfo.endCursor;
     }
-    if (!proj.pageInfo.hasNextPage) {
-      break;
-    }
-    after = proj.pageInfo.endCursor;
   }
-  fail(`Could not find a project titled "${title}" in org "${org}".`);
+  fail(`Could not find a project titled "${title}" in account "${login}".`);
 }
 
 /**
@@ -310,14 +341,12 @@ async function applyAssignees(repo, number, toAdd, toRemove) {
  * did the team review). Only called when the field was empty.
  */
 async function setReviewerField(boardId, itemId, fieldId, login) {
+  // NOTE: updateProjectV2ItemFieldValue takes a single `input` object
+  // (UpdateProjectV2ItemFieldValueInput), not top-level arguments — the
+  // old projectId/itemId/fieldId/value form is retired by the API.
   const mutation = `
-mutation ($projectId: ID!, $itemId: ID!, $fieldId: ID!, $value: String!) {
-  updateProjectV2ItemFieldValue(
-    projectId: $projectId
-    itemId: $itemId
-    fieldId: $fieldId
-    value: { text: $value }
-  ) {
+mutation ($input: UpdateProjectV2ItemFieldValueInput!) {
+  updateProjectV2ItemFieldValue(input: $input) {
     projectV2Item { id }
   }
 }
@@ -325,7 +354,10 @@ mutation ($projectId: ID!, $itemId: ID!, $fieldId: ID!, $value: String!) {
   const res = await fetch(`${API}/graphql`, {
     method: 'POST',
     headers: headers(),
-    body: JSON.stringify({ query: mutation, variables: { projectId: boardId, itemId, fieldId, value: login } }),
+    body: JSON.stringify({
+      query: mutation,
+      variables: { input: { projectId: boardId, itemId, fieldId, value: { text: login } } },
+    }),
   });
   if (!res.ok) {
     console.warn(`[reconcile]   ! field write HTTP ${res.status}: ${await res.text()}`);
@@ -341,7 +373,7 @@ mutation ($projectId: ID!, $itemId: ID!, $fieldId: ID!, $value: String!) {
 }
 
 async function main() {
-  const org = process.env.GH_ORG || 'devonfw';
+  const login = process.env.GH_ACCOUNT || process.env.GH_ORG || 'devonfw';
   const title = process.env.BOARD_TITLE || 'IDEasy board';
   const teamReviewColumn = process.env.TEAM_REVIEW_COLUMN || 'Team Review';
   const reviewerFieldName = process.env.REVIEWER_FIELD || 'Team Reviewer';
@@ -356,10 +388,10 @@ async function main() {
 
   const cfg = { teamReviewColumn, authorOnlyColumns };
 
-  console.log(`[reconcile] org=${org} board="${title}" dryRun=${dryRun}`);
+  console.log(`[reconcile] account=${login} board="${title}" dryRun=${dryRun}`);
   console.log(`[reconcile] teamReview="${teamReviewColumn}" authorOnly=[${authorOnlyColumns.join(', ')}] reviewerField="${reviewerFieldName}" takeoverLabel="${takeoverLabel}"`);
 
-  const board = await findBoard(org, title);
+  const board = await findBoard(login, title);
   console.log(`[reconcile] board id=${board.id}`);
 
   // The "Team Reviewer" field is optional: if it does not exist yet, the

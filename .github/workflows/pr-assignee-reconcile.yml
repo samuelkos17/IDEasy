@@ -48,10 +48,17 @@ permissions:
 
 env:
   GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-  GH_ORG: devonfw
+  # Account that owns the board: org for production (devonfw), but a USER
+  # account when testing in a fork / personal board. The script looks up both.
+  # >>> FORK TEST: currently set to the user account + that board's column
+  #     names. Revert to the devonfw values (see git history) before merging.
+  GH_ACCOUNT: samuelkos17
   BOARD_TITLE: 'IDEasy board'
   TEAM_REVIEW_COLUMN: 'Team Review'
-  AUTHOR_ONLY_COLUMNS: '🏗 In progress,👀 In review'
+  # NOTE: matches the board's Status option names exactly (they are matched
+  # literally). Fork test board uses plain names (no emoji); production uses
+  # '🏗 In progress,👀 In review'.
+  AUTHOR_ONLY_COLUMNS: 'In Progress,In Review'
   TAKEOVER_LABEL: 'takeover'
   # Repo VARIABLE RECONCILE_APPLY (set to "true") turns on writes. Default false.
   RECONCILE_APPLY: ${{ vars.RECONCILE_APPLY }}
