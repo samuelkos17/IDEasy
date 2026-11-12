@@ -17,21 +17,42 @@ name: Reconcile PR assignees
 #     bot does not revert it.
 #
 # GitHub emits no event when a card is moved between columns, so this runs on a
-# schedule and self-heals assignees to match the board. It changes PR assignees
-# (Issues/PRs REST API) and writes the Team Reviewer field (GraphQL); it never
-# moves cards — humans do that. Requires a TEXT field named "Team Reviewer"
-# on the board (see REVIEWER_FIELD). If it is missing, the run degrades to
-# inference-only and reports it.
+# schedule and self-heals assignees to match the board. The clock is no longer
+# GitHub's own cron trigger (unreliable: it fires at its leisure, about twice a
+# day) but the GitLab project "IDEasy-reconciler-scheduler" (file bundle in
+# .github/scripts/reconciler-scheduler/), whose scheduled pipeline triggers
+# this workflow via workflow_dispatch with source=scheduler. That scheduler
+# path is gated by the org kill switch ENABLE_AUTOMATIC_WORKFLOWS, so the
+# switch still stops the automatic cadence; manual runs (source=manual)
+# always execute.
+# It changes PR assignees (Issues/PRs REST API) and writes the Team Reviewer
+# field (GraphQL); it never moves cards — humans do that. Requires a TEXT
+# field named "Team Reviewer" on the board (see REVIEWER_FIELD). If it is
+# missing, the run degrades to inference-only and reports it.
 #
-# Safety: the default (and cron) behaviour is DRY RUN = report only. Enable
-# writes by setting the repo VARIABLE RECONCILE_APPLY to "true", or trigger
-# manually with dry_run=false. Merged / closed / dependabot PRs are ignored.
+# Safety: the default (and scheduled) behaviour is DRY RUN = report only.
+# Enable writes by setting the repo VARIABLE RECONCILE_APPLY to "true", or
+# trigger manually with dry_run=false. Merged / closed / dependabot PRs are
+# ignored.
 
 on:
-  schedule:
-    - cron: '*/30 * * * 1-5' # Mo-Fr: Every 30 minutes
+  # No `schedule:` on purpose: GitHub's cron trigger fires at its own leisure
+  # (about twice a day), not on the 30-minute cadence it was written for. The
+  # clock is the GitLab project "IDEasy-reconciler-scheduler" (see the header
+  # above and .github/scripts/reconciler-scheduler/); it presses this
+  # workflow's workflow_dispatch button with source=scheduler, Mo-Fr every
+  # 30 minutes.
   workflow_dispatch:
     inputs:
+      # Who triggered: "scheduler" is set by the GitLab project and gates the
+      # run behind ENABLE_AUTOMATIC_WORKFLOWS (the org kill switch); "manual"
+      # (the default for runs from this UI) always runs, so the switch never
+      # blocks a human.
+      source:
+        description: 'Trigger: manual (this UI) or scheduler (GitLab)'
+        type: choice
+        default: 'manual'
+        options: [ 'manual', 'scheduler' ]
       dry_run:
         description: 'Report only (true) or apply assignee changes (false)'
         type: choice
@@ -81,9 +102,14 @@ env:
 jobs:
   reconcile:
     runs-on: ubuntu-latest
+    # source=manual (the UI default) runs even with the org kill switch
+    # ENABLE_AUTOMATIC_WORKFLOWS off; source=scheduler (the GitLab clock) is
+    # gated by it, so the switch still stops the automatic cadence. Any
+    # non-dispatch event (push, pull_request, ...) runs nothing at all.
     if: >
-      github.event_name == 'workflow_dispatch' ||
-      vars.ENABLE_AUTOMATIC_WORKFLOWS == 'true'
+      github.event_name == 'workflow_dispatch' &&
+      ( github.event.inputs.source != 'scheduler' ||
+        vars.ENABLE_AUTOMATIC_WORKFLOWS == 'true' )
     steps:
       - name: Check out repository
         uses: actions/checkout@v7
